@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Basha jawaker TopUp</title>
+    <title>Basha Jawaker TopUp</title>
     
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -437,7 +437,7 @@
                 <div class="admin-header"><span class="admin-title" style="font-size:16px;">ربط API</span></div>
                 <input type="password" id="api-token" placeholder="API Token" class="admin-input" style="width:100%; margin-bottom:10px;">
                 <div class="admin-input-group">
-                    <input type="text" id="product-id" placeholder="Product ID" class="admin-input">
+                    <input type="text" id="product-id" placeholder="Product ID (مثال: 364)" class="admin-input">
                     <button onclick="saveApiSettings()" class="admin-action-btn">حفظ</button>
                 </div>
                 <button onclick="openSearchModal()" style="width:100%; margin-top:15px; background:rgba(255,255,255,0.05); color:#ccc; border:1px solid #333; padding:10px; border-radius:8px; cursor:pointer;">بحث في المنتجات</button>
@@ -559,6 +559,10 @@
         let privacyMode = false;
         let apiSettings = { token: '', productId: '' };
 
+        // إعدادات المزود (BashaStore)
+        const BashaApiBase = "https://api.bashastore.app";
+        const ProxyUrl = "https://corsproxy.io/?";
+
         const Toast = Swal.mixin({
             toast: true,
             position: 'bottom',
@@ -573,10 +577,9 @@
 
         db.ref('settings').on('value', snap => { if(snap.val()) apiSettings = snap.val(); });
 
-        // --- وظيفة توليد الفاتورة كصورة (تحديث: تقبل التاريخ) ---
+        // --- وظيفة توليد الفاتورة كصورة ---
         function generateReceipt(id, amount, orderId, dateStr) {
-            // تعبئة البيانات في القالب المخفي
-            document.getElementById('rec-date').innerText = dateStr.split(',')[0]; // أخذ التاريخ فقط بدون الوقت
+            document.getElementById('rec-date').innerText = dateStr.split(',')[0];
             document.getElementById('rec-oid').innerText = '#' + (orderId || '---');
             document.getElementById('rec-pid').innerText = id;
             document.getElementById('rec-agent').innerText = currentUser.username.toUpperCase();
@@ -592,15 +595,12 @@
                 allowOutsideClick: false
             });
 
-            // تحويل HTML إلى صورة
             html2canvas(node, {
-                scale: 2, // جودة عالية
+                scale: 2,
                 backgroundColor: null,
                 useCORS: true
             }).then(canvas => {
                 const imgData = canvas.toDataURL("image/png");
-
-                // عرض النتيجة
                 Swal.fire({
                     title: 'إيصال العملية',
                     imageUrl: imgData,
@@ -611,9 +611,7 @@
                     confirmButtonText: '<i class="fas fa-download"></i> حفظ',
                     showCancelButton: true,
                     cancelButtonText: 'إغلاق',
-                    customClass: {
-                        image: 'swal-receipt-img'
-                    }
+                    customClass: { image: 'swal-receipt-img' }
                 }).then((result) => {
                     if (result.isConfirmed) {
                         const link = document.createElement('a');
@@ -625,24 +623,210 @@
             });
         }
 
+        // --- وظيفة البحث عن المنتجات (محدثة لـ BashaStore) ---
+        function filterProducts() {
+            const term = document.getElementById('product-search-input').value.toLowerCase();
+            const list = document.getElementById('products-result-list');
+            list.innerHTML = '<div style="text-align:center; color:#888;">جاري البحث...</div>';
+            
+            const token = document.getElementById('api-token').value;
+            if(!token) { list.innerHTML = 'لا يوجد توكن'; return; }
+            
+            // الرابط النهائي: https://corsproxy.io/?https://api.bashastore.app/client/api/products
+            const targetUrl = ProxyUrl + encodeURIComponent(BashaApiBase + "/client/api/products");
+            
+            fetch(targetUrl, {
+                headers: {
+                    'api-token': token,
+                    'Accept': 'application/json'
+                }
+            })
+            .then(r => r.json())
+            .then(d => {
+                list.innerHTML = '';
+                // باشا ستور يُرجع المصفوفة مباشرة أو داخل data
+                const products = Array.isArray(d) ? d : (d.data || []);
+
+                if (!products || products.length === 0) {
+                    list.innerHTML = '<div style="color:red; text-align:center;">لا توجد منتجات أو خطأ في التوكن</div>';
+                    console.log("API Response:", d);
+                    return;
+                }
+
+                const filtered = products.filter(x => x.name.toLowerCase().includes(term));
+                
+                if (filtered.length === 0) {
+                     list.innerHTML = '<div style="text-align:center; color:#888;">لا توجد نتائج</div>';
+                     return;
+                }
+
+                filtered.forEach(p => {
+                    const div = document.createElement('div');
+                    div.style.cssText = "padding:12px; border-bottom:1px solid #333; cursor:pointer; display:flex; justify-content:space-between; align-items:center;";
+                    div.innerHTML = `<span>${p.name}</span><span style="color:var(--primary); font-weight:bold;">$${p.price}</span>`;
+                    div.onclick = () => { 
+                        document.getElementById('product-id').value = p.id; 
+                        closeModal('product-search-modal'); 
+                        Toast.fire({icon:'success', title: `تم اختيار: ${p.name} (ID: ${p.id})`});
+                    };
+                    list.appendChild(div);
+                });
+            })
+            .catch(e => {
+                console.error(e);
+                list.innerHTML = '<div style="color:var(--danger); text-align:center;">فشل الاتصال بالمزود</div>';
+            });
+        }
+
+        // --- وظيفة إرسال الطلب (محدثة لـ BashaStore) ---
+        function submitUserOrder() {
+            const id = document.getElementById('player_id').value;
+            const amtStr = document.getElementById('amount_display').value;
+            const amt = parseInt(amtStr.replace(/,/g, ''));
+
+            if(!id || !amt) return Toast.fire({icon:'warning', title:'يرجى إدخال الآيدي والكمية'});
+            if((currentUser.balance||0) < amt) return Toast.fire({icon:'error', title:'عذراً، رصيدك غير كافٍ'});
+            if(!apiSettings.token || !apiSettings.productId) return Toast.fire({icon:'error', title:'خطأ في إعدادات النظام'});
+
+            Swal.fire({
+                title: 'تأكيد العملية',
+                html: `
+                    <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:10px; border:1px solid #333; margin-top:5px;">
+                        <div style="font-size:12px; color:#888;">الآيدي</div>
+                        <div style="font-size:18px; font-weight:bold; color:white;">${id}</div>
+                        <div style="height:1px; background:#333; margin:8px 0;"></div>
+                        <div style="font-size:12px; color:#888;">الكمية</div>
+                        <div style="font-size:18px; font-weight:bold; color:var(--primary);">${amtStr}</div>
+                    </div>
+                `,
+                icon: 'question',
+                showCancelButton: true,
+                confirmButtonText: 'شحن',
+                cancelButtonText: 'إلغاء'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    Swal.fire({
+                        title: 'جاري الشحن...',
+                        allowOutsideClick: false,
+                        didOpen: () => { Swal.showLoading() },
+                        showConfirmButton: false 
+                    });
+
+                    const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8); return v.toString(16); });
+                    
+                    // رابط الطلب حسب وثائق BashaStore
+                    // /client/api/newOrder/{product_id}/params?qty={qty}&playerId={id}&order_uuid={uuid}
+                    const apiUrl = `${BashaApiBase}/client/api/newOrder/${apiSettings.productId}/params?qty=${amt}&playerId=${id}&order_uuid=${uuid}`;
+                    const targetUrl = ProxyUrl + encodeURIComponent(apiUrl);
+
+                    fetch(targetUrl, { 
+                        method:'GET', 
+                        headers:{
+                            'api-token': apiSettings.token,
+                            'Accept': 'application/json'
+                        } 
+                    })
+                    .then(r => r.json()).then(d => {
+                        // التحقق من الاستجابة حسب الوثائق
+                        /*
+                        {
+                            "status": "OK",
+                            "data": {
+                                "order_id": "...",
+                                "status": "accept/wait",
+                                "replay_api": [...]
+                            }
+                        }
+                        */
+
+                        if(d.status === 'OK' && d.data) {
+                            const orderData = d.data;
+                            const status = orderData.status; // accept, wait, reject
+                            const orderId = orderData.order_id;
+                            
+                            // استخراج الرسالة
+                            let apiMsg = 'تم إرسال الطلب';
+                            try {
+                                if (orderData.replay_api && Array.isArray(orderData.replay_api)) {
+                                     // غالباً تكون في replay_api[0].replay[0]
+                                     if (orderData.replay_api[0] && orderData.replay_api[0].replay) {
+                                         apiMsg = orderData.replay_api[0].replay[0] || apiMsg;
+                                     }
+                                }
+                            } catch(e){}
+
+                            // خصم الرصيد وتسجيل العملية
+                            db.ref('users/'+currentUser.username).transaction(u => {
+                                if(u) {
+                                    const oldB = u.balance || 0;
+                                    const newB = oldB - amt;
+                                    u.balance = newB;
+                                    u.totalSales = (u.totalSales||0)+1;
+                                    if(!u.history) u.history = [];
+                                    u.history.unshift({
+                                        type:'sale', 
+                                        date:new Date().toLocaleString(), 
+                                        amount:amtStr, 
+                                        id:id, 
+                                        orderId: orderId, 
+                                        status: (status === 'wait') ? 'قيد المعالجة' : 'مكتمل', 
+                                        apiRes: apiMsg, 
+                                        before:oldB, 
+                                        after:newB
+                                    });
+                                }
+                                return u;
+                            });
+
+                            document.getElementById('amount_display').value = '';
+                            document.getElementById('player_id').value = '';
+                            calculate(0);
+                            
+                            Swal.fire({ 
+                                icon: 'success', 
+                                title: 'تمت العملية', 
+                                html: `<div style="color:#ddd;">${apiMsg}</div>`,
+                                confirmButtonText: 'موافق' 
+                            });
+
+                        } else {
+                            // معالجة الأخطاء (مثل الرصيد غير كافي عند المزود)
+                            const errCode = d.error_code || 'Error';
+                            let errMsg = 'خطأ غير معروف';
+                            
+                            // ترجمة بعض أكواد الخطأ المشهورة من BashaStore
+                            if (errCode == 100) errMsg = 'رصيد الحساب غير كافي (عند المزود)';
+                            else if (errCode == 105) errMsg = 'الكمية غير متاحة';
+                            else if (errCode == 120 || errCode == 121) errMsg = 'خطأ في التوكن';
+                            else errMsg = `Code: ${errCode}`;
+
+                            Swal.fire({ 
+                                icon:'error', 
+                                title:'فشل الطلب', 
+                                text: errMsg,
+                                confirmButtonText: 'إغلاق' 
+                            });
+                        }
+                    }).catch(err => {
+                        console.error(err);
+                        Swal.fire({ icon:'error', title:'خطأ', text: 'فشل الاتصال بالمزود', confirmButtonText: 'إغلاق' });
+                    });
+                }
+            });
+        }
+
         // --- وظيفة تبديل الثيم ---
         let isRedTheme = false;
-
         function toggleTheme(e) {
             const crown = document.getElementById('crown-el');
             crown.classList.remove('spin-crown');
-            void crown.offsetWidth; // Reset animation
+            void crown.offsetWidth; 
             crown.classList.add('spin-crown');
 
             isRedTheme = !isRedTheme;
-            if (isRedTheme) {
-                document.body.classList.add('theme-red');
-            } else {
-                document.body.classList.remove('theme-red');
-            }
-
+            if (isRedTheme) { document.body.classList.add('theme-red'); } 
+            else { document.body.classList.remove('theme-red'); }
             if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
-
             const color = isRedTheme ? '#ff1744' : '#ffd700';
             createMagicExplosion(e.clientX, e.clientY, color);
         }
@@ -655,23 +839,16 @@
                 particle.style.background = color;
                 particle.style.boxShadow = `0 0 10px ${color}`;
                 document.body.appendChild(particle);
-
                 const angle = Math.random() * Math.PI * 2;
                 const velocity = Math.random() * 100 + 50;
                 const tx = Math.cos(angle) * velocity;
                 const ty = Math.sin(angle) * velocity;
-
                 particle.style.left = x + 'px';
                 particle.style.top = y + 'px';
-                
                 const animation = particle.animate([
                     { transform: 'translate(0, 0) scale(1)', opacity: 1 },
                     { transform: `translate(${tx}px, ${ty}px) scale(0)`, opacity: 0 }
-                ], {
-                    duration: 800 + Math.random() * 400,
-                    easing: 'cubic-bezier(0, .9, .57, 1)'
-                });
-
+                ], { duration: 800 + Math.random() * 400, easing: 'cubic-bezier(0, .9, .57, 1)' });
                 animation.onfinish = () => particle.remove();
             }
         }
@@ -702,7 +879,6 @@
                             setGreeting();
                             updateAvatarUI();
                             updateUserUI();
-                            
                             db.ref('users/' + savedUser).on('value', s => {
                                 if(s.val()) {
                                     currentUser = s.val();
@@ -733,7 +909,6 @@
             const menu = document.getElementById('main-dropdown');
             const btn = document.getElementById('menu-btn');
             const isClickInside = menu.contains(event.target) || btn.contains(event.target);
-            
             if (!isClickInside && menu.classList.contains('show')) {
                 menu.classList.remove('show');
                 btn.classList.remove('active');
@@ -758,7 +933,6 @@
         function openAvatarModal() {
             const menu = document.getElementById('main-dropdown');
             if(menu.classList.contains('show')) toggleMenu();
-            
             document.getElementById('settings-modal').classList.remove('show');
             document.getElementById('avatar-modal').classList.add('show');
             document.getElementById('avatar-url-input').value = currentUser.avatar || '';
@@ -784,7 +958,6 @@
         function updateAvatarUI() {
             const img = document.getElementById('user-img-tag');
             const initial = document.getElementById('user-initial');
-            
             if (currentUser && currentUser.avatar) {
                 img.src = currentUser.avatar;
                 img.style.display = 'block';
@@ -825,7 +998,6 @@
                         document.getElementById('app-view').style.display = 'block';
                         document.getElementById('display-username').innerText = u;
                         document.getElementById('user-initial').innerText = u.charAt(0).toUpperCase();
-                        
                         setGreeting();
                         updateAvatarUI();
                         updateUserUI();
@@ -903,115 +1075,6 @@
             });
         }
 
-        function submitUserOrder() {
-            const id = document.getElementById('player_id').value;
-            const amtStr = document.getElementById('amount_display').value;
-            const amt = parseInt(amtStr.replace(/,/g, ''));
-
-            if(!id || !amt) return Toast.fire({icon:'warning', title:'يرجى إدخال الآيدي والكمية'});
-            if((currentUser.balance||0) < amt) return Toast.fire({icon:'error', title:'عذراً، رصيدك غير كافٍ'});
-            if(!apiSettings.token || !apiSettings.productId) return Toast.fire({icon:'error', title:'خطأ في إعدادات النظام'});
-
-            Swal.fire({
-                title: 'تأكيد العملية',
-                html: `
-                    <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:10px; border:1px solid #333; margin-top:5px;">
-                        <div style="font-size:12px; color:#888;">الآيدي</div>
-                        <div style="font-size:18px; font-weight:bold; color:white;">${id}</div>
-                        <div style="height:1px; background:#333; margin:8px 0;"></div>
-                        <div style="font-size:12px; color:#888;">الكمية</div>
-                        <div style="font-size:18px; font-weight:bold; color:var(--primary);">${amtStr}</div>
-                    </div>
-                `,
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'شحن',
-                cancelButtonText: 'إلغاء'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    Swal.fire({
-                        title: 'جاري الشحن...',
-                        allowOutsideClick: false,
-                        didOpen: () => { Swal.showLoading() },
-                        showConfirmButton: false 
-                    });
-
-                    const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8); return v.toString(16); });
-                    const url = `/api/newOrder/${apiSettings.productId}/params?qty=${amt}&playerId=${id}&order_uuid=${uuid}`;
-
-                    fetch(url, { method:'GET', headers:{'api-token': apiSettings.token} })
-                    .then(r => r.json()).then(d => {
-                        if(d.status==='OK' && d.data) {
-                            const st = d.data.status;
-                            const oid = d.data.order_id;
-                            
-                            if(st==='accept') {
-                                let apiMsg = 'تم الشحن بنجاح';
-                                try { if(d.data.replay_api && d.data.replay_api[0].replay) apiMsg = d.data.replay_api[0].replay[0]; } catch(e){}
-                                
-                                db.ref('users/'+currentUser.username).transaction(u => {
-                                    if(u) {
-                                        const oldB = u.balance || 0;
-                                        const newB = oldB - amt;
-                                        u.balance = newB;
-                                        u.totalSales = (u.totalSales||0)+1;
-                                        if(!u.history) u.history = [];
-                                        u.history.unshift({type:'sale', date:new Date().toLocaleString(), amount:amtStr, id:id, orderId:oid, status:'مكتمل', apiRes:apiMsg, before:oldB, after:newB});
-                                    }
-                                    return u;
-                                });
-                                document.getElementById('amount_display').value = '';
-                                document.getElementById('player_id').value = '';
-                                calculate(0);
-                                
-                                Swal.fire({ 
-                                    icon:'success', 
-                                    title:'تم الشحن', 
-                                    html: `
-                                        <div style="font-size:14px; color:#ddd; margin-bottom:15px; line-height:1.6;">${apiMsg}</div>
-                                        <div class="copy-result-btn" onclick="copyToClipboard('${apiMsg}')">
-                                            <span>نسخ الرد</span>
-                                            <i class="fas fa-copy"></i>
-                                        </div>
-                                    `,
-                                    confirmButtonText: 'موافق' 
-                                });
-
-                            } else if (st==='wait') {
-                                 db.ref('users/'+currentUser.username).transaction(u => {
-                                    if(u) {
-                                        const oldB = u.balance || 0;
-                                        const newB = oldB - amt;
-                                        u.balance = newB;
-                                        if(!u.history) u.history = [];
-                                        u.history.unshift({type:'sale', date:new Date().toLocaleString(), amount:amtStr, id:id, orderId:oid, status:'قيد المعالجة', apiRes:'قيد الانتظار', before:oldB, after:newB});
-                                    }
-                                    return u;
-                                });
-                                Swal.fire({ icon:'info', title:'قيد الانتظار', text: 'الطلب قيد المعالجة', confirmButtonText: 'حسناً' });
-                            } else {
-                                Swal.fire({ icon:'error', title:'فشل', text: 'فشلت العملية', confirmButtonText: 'إغلاق' });
-                            }
-                        } else {
-                            const errMsg = d.error_code || 'غير معروف';
-                            Swal.fire({ 
-                                icon:'error', 
-                                title:'خطأ', 
-                                html: `
-                                    <div style="font-size:14px; color:#ddd; margin-bottom:15px;">${errMsg}</div>
-                                    <div class="copy-result-btn" onclick="copyToClipboard('${errMsg}')">
-                                        <span>نسخ الخطأ</span>
-                                        <i class="fas fa-copy"></i>
-                                    </div>
-                                `,
-                                confirmButtonText: 'إغلاق' 
-                            });
-                        }
-                    }).catch(() => Swal.fire({ icon:'error', title:'خطأ', text: 'مشكلة اتصال', confirmButtonText: 'إغلاق' }));
-                }
-            });
-        }
-
         function openHistoryModal() {
             toggleMenu(); 
             document.getElementById('history-modal').classList.add('show');
@@ -1050,7 +1113,6 @@
                 item.style.animationDelay = `${index * 0.05}s`; 
                 item.className = `history-card ${statusClass}`;
                 
-                // زر الطباعة يظهر فقط إذا كانت الحالة ناجحة أو مكتملة
                 const showPrint = statusClass === 'success' ? `
                     <button class="h-action-btn h-btn-print" onclick="generateReceipt('${h.id}', '${h.amount}', '${h.orderId}', '${h.date}')">
                         <i class="fas fa-file-image"></i>
@@ -1096,30 +1158,20 @@
             });
         }
 
-        // --- تحديث المحفظة بالحسابات الجديدة ---
         function openWalletModal() {
             document.getElementById('wallet-modal').classList.add('show');
-            
-            // 1. عرض الرصيد الحالي
             const bal = (currentUser.balance || 0).toLocaleString();
             document.getElementById('wallet-modal-balance').innerText = bal;
 
-            // 2. حساب المبيعات (اليوم والإجمالي)
             let todaySum = 0;
             let totalSum = 0;
-            const todayStr = new Date().toLocaleDateString(); // يجلب تاريخ اليوم بصيغة (D/M/YYYY) حسب الجهاز
+            const todayStr = new Date().toLocaleDateString(); 
 
             if (currentUser.history) {
                 currentUser.history.forEach(h => {
                     if (h.type === 'sale') {
-                        // تنظيف الرقم من الفواصل وحسابه
                         const amt = parseInt(h.amount.toString().replace(/,/g, '')) || 0;
-                        
-                        // الإجمالي
                         totalSum += amt;
-
-                        // اليوم (نتأكد أن تاريخ العملية يحتوي على تاريخ اليوم)
-                        // ملاحظة: h.date يخزن التاريخ والوقت، لذلك نستخدم includes
                         if (h.date && h.date.includes(todayStr)) {
                             todaySum += amt;
                         }
@@ -1127,12 +1179,9 @@
                 });
             }
 
-            // تحديث الواجهة بالأرقام
             document.getElementById('wallet-today-sales').innerText = todaySum.toLocaleString();
             document.getElementById('wallet-total-sales').innerText = totalSum.toLocaleString();
 
-
-            // 3. عرض سجل الحركات (شحن رصيد / خصم)
             const list = document.getElementById('wallet-history-list');
             list.innerHTML = '';
             const logs = (currentUser.history||[]).filter(h => h.type==='in' || h.note);
@@ -1222,6 +1271,7 @@
             document.getElementById('api-token').value = apiSettings.token || '';
             document.getElementById('product-id').value = apiSettings.productId || '';
         }
+
         function modifyBalance(k, t) {
             Swal.fire({title:t==='add'?'إضافة رصيد':'خصم رصيد', input:'number', showCancelButton:true}).then(r=>{
                 if(r.value) {
@@ -1236,6 +1286,7 @@
                 }
             });
         }
+
         function createNewUser() {
             const n = document.getElementById('new-agent-name').value;
             const p = document.getElementById('new-agent-pass').value;
@@ -1246,6 +1297,7 @@
                 Toast.fire({icon:'success', title:'تم إضافة الوكيل'});
             }
         }
+
         function deleteUser(k) { 
             Swal.fire({title:'هل أنت متأكد؟', text:`سيتم حذف الوكيل ${k}`, icon:'warning', showCancelButton:true, confirmButtonColor:'#d33', cancelButtonColor:'#3085d6', confirmButtonText:'حذف'}).then((result) => {
                 if (result.isConfirmed) {
@@ -1254,28 +1306,16 @@
                 }
             })
         }
-        function saveApiSettings() { db.ref('settings').update({token:document.getElementById('api-token').value, productId:document.getElementById('product-id').value}); Toast.fire({icon:'success', title: 'تم الحفظ'}); }
+
+        function saveApiSettings() { 
+            db.ref('settings').update({
+                token: document.getElementById('api-token').value, 
+                productId: document.getElementById('product-id').value
+            }); 
+            Toast.fire({icon:'success', title: 'تم الحفظ'}); 
+        }
         
         function openSearchModal() { document.getElementById('product-search-modal').classList.add('show'); }
-        function filterProducts() {
-            const term = document.getElementById('product-search-input').value.toLowerCase();
-            const list = document.getElementById('products-result-list');
-            list.innerHTML = '<div style="text-align:center; color:#888;">جاري البحث...</div>';
-            
-            const token = document.getElementById('api-token').value;
-            if(!token) { list.innerHTML = 'لا يوجد توكن'; return; }
-            
-            fetch('/api/products', {headers:{'api-token':token}}).then(r=>r.json()).then(d=>{
-                list.innerHTML = '';
-                d.filter(x=>x.name.toLowerCase().includes(term)).forEach(p=>{
-                    const div = document.createElement('div');
-                    div.style.cssText = "padding:12px; border-bottom:1px solid #333; cursor:pointer; display:flex; justify-content:space-between;";
-                    div.innerHTML = `<span>${p.name}</span><span style="color:var(--primary)">${p.price}$</span>`;
-                    div.onclick = ()=>{ document.getElementById('product-id').value = p.id; closeModal('product-search-modal'); };
-                    list.appendChild(div);
-                });
-            });
-        }
 
         window.onload = checkSession;
     </script>
