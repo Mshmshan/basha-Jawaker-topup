@@ -1,0 +1,1 @@
+/api/* https://api.bashastore.app/client/api/:splat  200
